@@ -10,6 +10,12 @@ import aiohttp
 from aiohttp import ClientSession, TCPConnector
 import ssl
 import certifi
+import datetime
+import sys
+
+# 为旧版本 Python 添加 UTC 支持
+if not hasattr(datetime, 'UTC'):
+    datetime.UTC = datetime.timezone.utc
 
 class EdgeTTSService:
     def __init__(self):

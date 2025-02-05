@@ -1,6 +1,6 @@
 fastapi==0.109.2
 uvicorn==0.27.1
-edge-tts==6.1.9
+edge-tts==6.1.16
 pandas==2.2.0
 python-multipart==0.0.9
 aiofiles==23.2.1
