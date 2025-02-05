@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>中英文听写系统</title>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <script src="https://cdn.jsdelivr.net/npm/vue@3.2.31/dist/vue.global.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+</head>
+<body class="bg-gray-100">
+    <div id="app" class="container mx-auto px-4 py-8">
+        <!-- 错误提示 -->
+        <div v-if="error" class="mb-4 bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative" role="alert">
+            <span class="block sm:inline">{{ error }}</span>
+        </div>
+
+        <!-- 头部 -->
+        <header class="text-center mb-8">
+            <h1 class="text-3xl font-bold text-gray-800">中英文听写系统</h1>
+            <p class="text-gray-600 mt-2">支持中英文听写练习，可调节语速和发音</p>
+        </header>
+
+        <!-- 主要内容区 -->
+        <main class="bg-white rounded-lg shadow-lg p-6">
+            <!-- 课程选择 -->
+            <div class="mb-6">
+                <h2 class="text-xl font-semibold mb-4">选择课程</h2>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-gray-700 mb-2">年级</label>
+                        <select v-model="selectedGrade" class="w-full p-2 border rounded">
+                            <option value="">请选择年级</option>
+                            <option v-for="grade in grades" :key="grade" :value="grade">{{ grade }}</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-gray-700 mb-2">课时</label>
+                        <select v-model="selectedLesson" class="w-full p-2 border rounded">
+                            <option value="">请选择课时</option>
+                            <option v-for="lesson in lessons" :key="lesson" :value="lesson">{{ lesson }}</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TTS设置 -->
+            <div class="mb-6">
+                <h2 class="text-xl font-semibold mb-4">语音设置</h2>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                        <label class="block text-gray-700 mb-2">TTS引擎</label>
+                        <select v-model="ttsEngine" class="w-full p-2 border rounded">
+                            <option value="edge-tts">Edge TTS</option>
+                            <option value="web-speech">Web Speech</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-gray-700 mb-2">语音</label>
+                        <select v-model="selectedVoice" class="w-full p-2 border rounded">
+                            <option value="">请选择语音</option>
+                            <option v-for="voice in filteredVoices" :key="voice.name" :value="voice.name">
+                                {{ voice.displayName }}
+                            </option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-gray-700 mb-2">语速</label>
+                        <input type="range" v-model="rate" min="0.5" max="2" step="0.1" class="w-full">
+                        <div class="text-center text-gray-600">{{ rate }}x</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 播放控制 -->
+            <div class="mb-6">
+                <h2 class="text-xl font-semibold mb-4">播放控制</h2>
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                    <div>
+                        <label class="block text-gray-700 mb-2">播放模式</label>
+                        <select v-model="playMode" class="w-full p-2 border rounded">
+                            <option value="sequence">顺序播放</option>
+                            <option value="random">随机播放</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-gray-700 mb-2">重复次数</label>
+                        <select v-model="repeatCount" class="w-full p-2 border rounded">
+                            <option v-for="n in 5" :key="n" :value="n">{{ n }}次</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-gray-700 mb-2">重复间隔</label>
+                        <select v-model="repeatInterval" class="w-full p-2 border rounded">
+                            <option v-for="n in 10" :key="n" :value="n">{{ n }}秒</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 操作按钮 -->
+            <div class="flex justify-center space-x-4">
+                <button @click="startDictation" 
+                        :disabled="!selectedGrade || !selectedLesson"
+                        :class="{'bg-gray-400': !selectedGrade || !selectedLesson, 'bg-blue-500 hover:bg-blue-600': selectedGrade && selectedLesson}"
+                        class="text-white px-6 py-2 rounded">
+                    开始听写
+                </button>
+                <button @click="generateMP3" 
+                        :disabled="!selectedGrade || !selectedLesson || isGenerating"
+                        :class="{'bg-gray-400': !selectedGrade || !selectedLesson || isGenerating, 'bg-green-500 hover:bg-green-600': selectedGrade && selectedLesson && !isGenerating}"
+                        class="text-white px-6 py-2 rounded">
+                    {{ isGenerating ? '生成中...' : '生成MP3' }}
+                </button>
+                <button @click="stopDictation" 
+                        :disabled="!isDictating"
+                        :class="{'bg-gray-400': !isDictating, 'bg-red-500 hover:bg-red-600': isDictating}"
+                        class="text-white px-6 py-2 rounded">
+                    停止
+                </button>
+            </div>
+
+            <!-- MP3下载链接 -->
+            <div v-if="mp3Url" class="mt-4 text-center">
+                <a :href="mp3Url" 
+                   download="dictation.mp3"
+                   class="text-blue-500 hover:text-blue-700 underline">
+                    下载听写音频文件
+                </a>
+            </div>
+
+            <!-- 听写区域 -->
+            <div v-if="isDictating" class="mt-8">
+                <h2 class="text-xl font-semibold mb-4">听写区域</h2>
+                <div class="bg-gray-50 p-4 rounded">
+                    <div class="text-center text-2xl mb-4">{{ currentWord || '准备开始...' }}</div>
+                    <div class="flex justify-center space-x-4">
+                        <button @click="playCurrentWord" 
+                                :disabled="!currentWord"
+                                :class="{'bg-gray-400': !currentWord, 'bg-green-500 hover:bg-green-600': currentWord}"
+                                class="text-white px-4 py-2 rounded">
+                            重播当前词语
+                        </button>
+                        <button @click="nextWord"
+                                :disabled="!currentWord"
+                                :class="{'bg-gray-400': !currentWord, 'bg-blue-500 hover:bg-blue-600': currentWord}"
+                                class="text-white px-4 py-2 rounded">
+                            下一个
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- 状态栏 -->
+        <footer class="mt-8 text-center text-gray-600">
+            <div v-if="status" class="mb-2">
+                当前并发数: {{ status.currentConcurrency }} / {{ status.maxConcurrency }}
+                <span v-if="status.waiting > 0" class="text-yellow-600">
+                    (等待队列: {{ status.waiting }})
+                </span>
+            </div>
+            <div>© 2024 中英文听写系统</div>
+        </footer>
+    </div>
+
+    <!-- 应用逻辑 -->
+    <script src="js/app.js"></script>
+</body>
+</html> 
