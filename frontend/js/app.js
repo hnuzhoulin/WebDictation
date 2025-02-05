@@ -18,6 +18,7 @@ const app = Vue.createApp({
             playMode: 'sequence',
             repeatCount: 1,
             repeatInterval: 3,
+            showWord: false,  // 默认不显示，将从后端获取配置
             
             // 听写状态
             isDictating: false,
@@ -47,7 +48,28 @@ const app = Vue.createApp({
             
             // MP3 生成状态
             isGenerating: false,
-            mp3Url: null
+            mp3Url: null,
+            
+            // 音频状态
+            audioState: {
+                currentAudio: null,
+                audioQueue: [],
+                isPlaying: false,
+                currentRepeatCount: 0
+            },
+            
+            // 浏览器环境
+            browser: {
+                isWechat: /MicroMessenger/i.test(navigator.userAgent),
+                audioContext: null
+            },
+            
+            // 缓存状态
+            cacheStatus: {
+                isChecking: false,
+                progress: 0,
+                total: 0
+            }
         }
     },
     
@@ -82,9 +104,33 @@ const app = Vue.createApp({
         // 初始化
         async init() {
             this.sessionId = 'session_' + Math.random().toString(36).substr(2, 9)
+            
+            // 初始化音频上下文（针对微信浏览器）
+            if (this.browser.isWechat) {
+                try {
+                    const AudioContext = window.AudioContext || window.webkitAudioContext
+                    this.browser.audioContext = new AudioContext()
+                } catch (e) {
+                    console.error('创建音频上下文失败:', e)
+                }
+            }
+            
+            await this.loadConfig()
             await this.loadGrades()
             await this.loadVoices()
             this.startStatusPolling()
+        },
+        
+        // 加载配置
+        async loadConfig() {
+            try {
+                const response = await axios.get('/api/tts/config')
+                if (response.data.success) {
+                    this.showWord = response.data.data.showWord
+                }
+            } catch (error) {
+                console.error('加载配置失败:', error)
+            }
         },
         
         // 加载年级列表
@@ -163,22 +209,55 @@ const app = Vue.createApp({
             this.loading.voices = true
             
             try {
-                const response = await axios.get(`/api/tts/voices?engine=${this.ttsEngine}`)
-                console.log('语音数据:', response.data)  // 调试输出
-                
-                if (response.data.success) {
-                    this.voices = response.data.data
-                    if (this.filteredVoices.length > 0) {
-                        // 默认选择第一个中文女声
-                        const defaultVoice = this.filteredVoices.find(v => 
-                            v.locale === 'zh-CN' && v.gender === 'Female'
-                        )
-                        this.selectedVoice = defaultVoice ? defaultVoice.name : this.filteredVoices[0].name
+                if (this.ttsEngine === 'web-speech') {
+                    // 使用Web Speech API获取语音列表
+                    if ('speechSynthesis' in window) {
+                        // 等待语音列表加载
+                        await new Promise((resolve) => {
+                            if (speechSynthesis.getVoices().length) {
+                                resolve()
+                            } else {
+                                speechSynthesis.onvoiceschanged = resolve
+                            }
+                        })
+                        
+                        // 获取语音列表
+                        const voices = speechSynthesis.getVoices()
+                        this.voices = voices.map(voice => ({
+                            name: voice.name,
+                            locale: voice.lang,
+                            gender: voice.name.toLowerCase().includes('female') ? 'Female' : 'Male'
+                        }))
+                        
+                        if (this.filteredVoices.length > 0) {
+                            // 默认选择第一个中文语音
+                            const defaultVoice = this.filteredVoices.find(v => 
+                                v.locale.startsWith('zh-')
+                            )
+                            this.selectedVoice = defaultVoice ? defaultVoice.name : this.filteredVoices[0].name
+                        }
                     } else {
-                        this.showError('没有找到可用的语音')
+                        this.showError('您的浏览器不支持 Web Speech API')
                     }
                 } else {
-                    this.showError('加载语音失败: ' + response.data.message)
+                    // 使用后端TTS服务获取语音列表
+                    const response = await axios.get(`/api/tts/voices?engine=${this.ttsEngine}`)
+                    console.log('语音数据:', response.data)  // 调试输出
+                    
+                    if (response.data.success) {
+                        this.voices = response.data.data
+                        if (this.filteredVoices.length > 0) {
+                            // 默认选择第一个中文女声
+                            const defaultVoice = this.filteredVoices.find(v => 
+                                v.locale === 'zh-CN' && v.gender === 'Female'
+                            )
+                            this.selectedVoice = defaultVoice ? defaultVoice.name : this.filteredVoices[0].name
+                        } else {
+                            this.showError('没有找到可用的语音')
+                        }
+                    } else {
+                        this.showError('加载语音失败: ' + response.data.message)
+                    }
                 }
             } catch (error) {
                 this.showError('加载语音失败: ' + (error.response?.data?.detail || error.message))
@@ -201,23 +280,103 @@ const app = Vue.createApp({
                 )
                 
                 if (response.data.success) {
-                    this.words = response.data.data.words
+                    let words = response.data.data.words
                     if (this.playMode === 'random') {
                         // 随机打乱单词顺序
-                        this.words = this.words
+                        words = words
                             .map(value => ({ value, sort: Math.random() }))
                             .sort((a, b) => a.sort - b.sort)
                             .map(({ value }) => value)
                     }
                     
-                    this.currentIndex = 0
-                    this.isDictating = true
-                    this.playCurrentWord()
+                    this.words = words
+                    
+                    // 检查缓存状态
+                    const cacheResult = await this.checkCache(words)
+                    
+                    if (cacheResult) {
+                        // 所有缓存就绪，开始听写
+                        this.currentIndex = 0
+                        this.isDictating = true
+                        this.playCurrentWord()
+                    }
                 } else {
                     this.showError('加载单词失败: ' + response.data.message)
                 }
             } catch (error) {
                 this.showError('加载单词失败: ' + (error.response?.data?.detail || error.message))
+            }
+        },
+        
+        // 使用AudioContext播放音频（针对微信浏览器）
+        async playAudioWithContext(audioData) {
+            try {
+                const audioContext = this.browser.audioContext
+                if (!audioContext) throw new Error('音频上下文未初始化')
+
+                // 将音频数据转换为ArrayBuffer
+                const arrayBuffer = await audioData.arrayBuffer()
+                
+                // 解码音频数据
+                const audioBuffer = await audioContext.decodeAudioData(arrayBuffer)
+                
+                // 创建音频源
+                const source = audioContext.createBufferSource()
+                source.buffer = audioBuffer
+                source.connect(audioContext.destination)
+                
+                // 记录开始时间
+                const startTime = audioContext.currentTime
+                
+                // 开始播放
+                source.start(0)
+                
+                // 返回Promise，在播放结束时resolve
+                return new Promise((resolve) => {
+                    source.onended = resolve
+                    // 如果播放时间超过音频长度，也认为播放结束
+                    setTimeout(resolve, audioBuffer.duration * 1000 + 100)
+                })
+            } catch (error) {
+                console.error('音频播放失败:', error)
+                throw error
+            }
+        },
+        
+        // 预加载音频
+        async preloadAudio(text) {
+            try {
+                const headers = { 'X-Session-ID': this.sessionId }
+                const response = await axios.post('/api/tts', {
+                    text: text,
+                    engine: this.ttsEngine,
+                    voice: this.selectedVoice,
+                    rate: this.rate
+                }, {
+                    headers,
+                    responseType: 'blob'
+                })
+                
+                if (this.browser.isWechat) {
+                    // 微信浏览器直接返回音频数据
+                    return response.data
+                } else {
+                    // 其他浏览器使用Audio对象
+                    const audio = new Audio()
+                    audio.src = URL.createObjectURL(response.data)
+                    
+                    // 等待音频加载完成
+                    await new Promise((resolve, reject) => {
+                        audio.oncanplaythrough = resolve
+                        audio.onerror = reject
+                        audio.load()
+                    })
+                    
+                    return audio
+                }
+            } catch (error) {
+                console.error('预加载音频失败:', error)
+                throw error
             }
         },
         
@@ -235,36 +394,82 @@ const app = Vue.createApp({
                 return
             }
             
-            // 使用Edge TTS
             try {
-                const headers = { 'X-Session-ID': this.sessionId }
-                const response = await axios.post('/api/tts', {
-                    text: this.currentWord,
-                    engine: this.ttsEngine,
-                    voice: this.selectedVoice,
-                    rate: this.rate
-                }, {
-                    headers,
-                    responseType: 'blob'
-                })
-                
-                const audio = new Audio(URL.createObjectURL(response.data))
-                this.autoPlay.currentRepeatCount = 0
-                
-                audio.onended = () => {
-                    this.autoPlay.currentRepeatCount++
-                    if (this.autoPlay.currentRepeatCount < this.repeatCount) {
-                        // 设置定时器等待指定间隔后重复播放
-                        setTimeout(() => audio.play(), this.repeatInterval * 1000)
+                // 停止当前播放
+                if (this.audioState.currentAudio) {
+                    if (this.browser.isWechat) {
+                        // 微信浏览器不需要特殊处理停止
                     } else {
-                        // 重复次数达到后，自动播放下一个词语
-                        setTimeout(() => this.nextWord(), this.repeatInterval * 1000)
+                        this.audioState.currentAudio.pause()
+                        this.audioState.currentAudio.src = ''
                     }
                 }
                 
-                audio.play()
+                // 重置状态
+                this.audioState.currentRepeatCount = 0
+                this.audioState.isPlaying = true
+                
+                // 预加载当前音频
+                const audio = await this.preloadAudio(this.currentWord)
+                this.audioState.currentAudio = audio
+                
+                // 预加载下一个单词（如果有）
+                if (this.currentIndex < this.words.length - 1) {
+                    const nextWord = this.words[this.currentIndex + 1]
+                    this.preloadAudio(nextWord).then(nextAudio => {
+                        this.audioState.audioQueue = [nextAudio]
+                    }).catch(console.error)
+                }
+                
+                // 播放音频
+                if (this.browser.isWechat) {
+                    // 微信浏览器使用AudioContext播放
+                    for (let i = 0; i < this.repeatCount; i++) {
+                        if (!this.audioState.isPlaying) break
+                        
+                        if (i > 0) {
+                            // 重复播放之间的间隔
+                            await new Promise(resolve => setTimeout(resolve, this.repeatInterval * 1000))
+                        }
+                        
+                        await this.playAudioWithContext(audio)
+                    }
+                    
+                    // 播放完成后，等待间隔时间再播放下一个
+                    if (this.audioState.isPlaying) {
+                        setTimeout(() => this.nextWord(), this.repeatInterval * 1000)
+                    }
+                } else {
+                    // 其他浏览器使用普通的Audio对象播放
+                    audio.onended = async () => {
+                        if (!this.audioState.isPlaying) return
+                        
+                        this.audioState.currentRepeatCount++
+                        if (this.audioState.currentRepeatCount < this.repeatCount) {
+                            setTimeout(() => {
+                                if (this.audioState.isPlaying) {
+                                    audio.currentTime = 0
+                                    audio.play().catch(error => {
+                                        console.error('重复播放失败:', error)
+                                        this.showError('播放失败，请点击"重播当前词语"按钮')
+                                    })
+                                }
+                            }, this.repeatInterval * 1000)
+                        } else {
+                            setTimeout(() => {
+                                if (this.audioState.isPlaying) {
+                                    this.nextWord()
+                                }
+                            }, this.repeatInterval * 1000)
+                        }
+                    }
+                    
+                    await audio.play()
+                }
+                
             } catch (error) {
-                this.showError('播放失败: ' + (error.response?.data?.detail || error.message))
+                console.error('播放失败:', error)
+                this.showError('播放失败: ' + error.message)
             }
         },
         
@@ -310,8 +515,32 @@ const app = Vue.createApp({
             this.isDictating = false
             this.currentWord = ''
             this.currentIndex = 0
-            this.autoPlay.currentRepeatCount = 0
-            // 清除可能存在的定时器
+            
+            // 停止所有音频播放
+            this.audioState.isPlaying = false
+            
+            if (!this.browser.isWechat && this.audioState.currentAudio) {
+                this.audioState.currentAudio.pause()
+                this.audioState.currentAudio.src = ''
+            }
+            
+            this.audioState.currentAudio = null
+            
+            // 清理音频队列
+            if (!this.browser.isWechat) {
+                this.audioState.audioQueue.forEach(audio => {
+                    if (audio) {
+                        audio.pause()
+                        audio.src = ''
+                    }
+                })
+            }
+            this.audioState.audioQueue = []
+            
+            // 重置状态
+            this.audioState.currentRepeatCount = 0
+            
+            // 清除定时器
             if (this.autoPlay.timer) {
                 clearTimeout(this.autoPlay.timer)
                 this.autoPlay.timer = null
@@ -368,7 +597,9 @@ const app = Vue.createApp({
                     voice: this.selectedVoice,
                     rate: this.rate,
                     repeatCount: this.repeatCount,
-                    repeatInterval: this.repeatInterval
+                    repeatInterval: this.repeatInterval,
+                    grade: this.selectedGrade,  // 添加年级
+                    lesson: this.selectedLesson  // 添加课时
                 }, {
                     responseType: 'blob'
                 })
@@ -381,6 +612,67 @@ const app = Vue.createApp({
                 this.showError('生成MP3失败: ' + (error.response?.data?.detail || error.message))
             } finally {
                 this.isGenerating = false
+            }
+        },
+        
+        // 检查缓存
+        async checkCache(words) {
+            this.cacheStatus.isChecking = true
+            this.cacheStatus.progress = 0
+            this.cacheStatus.total = words.length
+            
+            try {
+                const response = await fetch('/api/tts/check-cache', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        words: words,
+                        engine: this.ttsEngine,
+                        voice: this.selectedVoice,
+                        rate: this.rate
+                    })
+                })
+
+                const reader = response.body.getReader()
+                const decoder = new TextDecoder()
+
+                while (true) {
+                    const { value, done } = await reader.read()
+                    if (done) break
+                    
+                    const lines = decoder.decode(value).trim().split('\n')
+                    for (const line of lines) {
+                        if (!line.trim()) continue  // 跳过空行
+                        
+                        try {
+                            console.log('收到的数据:', line)  // 添加日志
+                            const data = JSON.parse(line)
+                            console.log('解析后的数据:', data)  // 添加日志
+                            
+                            this.cacheStatus.progress = data.progress
+                            this.cacheStatus.total = data.total
+                            
+                            if (data.ready !== undefined) {
+                                if (!data.ready) {
+                                    throw new Error(`以下单词缓存失败: ${data.failed_words.join(', ')}`)
+                                }
+                                return true
+                            }
+                        } catch (e) {
+                            console.error('解析进度数据失败:', e, '原始数据:', line)
+                        }
+                    }
+                }
+                
+                return false  // 如果循环正常结束但没有收到最终结果
+            } catch (error) {
+                console.error('检查缓存失败:', error)
+                this.showError(error.message || '检查缓存失败')
+                return false
+            } finally {
+                this.cacheStatus.isChecking = false
             }
         }
     },

@@ -24,6 +24,9 @@ class Settings(BaseSettings):
         }
     }
     
+    # 听写配置
+    SHOW_WORD: bool = False  # 是否在前端显示当前听写的词语
+    
     # 文件配置
     WORDS_FILE: Path = Path("data/words.xlsx")
     

@@ -39,6 +39,12 @@ app.add_middleware(ConcurrencyMiddleware)
 app.include_router(dict.router)
 app.include_router(tts.router)
 
+@app.on_event("startup")
+async def startup_event():
+    """应用启动时的初始化"""
+    # 初始化TTS缓存文件
+    await tts.init_cache_files()
+
 @app.get("/api/status")
 async def get_status():
     """获取系统状态"""
