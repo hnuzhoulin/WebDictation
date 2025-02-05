@@ -23,6 +23,15 @@ class EdgeTTSService:
         self._voices_cache_time = 0  # 语音列表缓存时间
         self._voices_cache_ttl = 3600  # 缓存有效期（1小时）
         
+        # 获取代理设置
+        self._proxy = os.environ.get('HTTPS_PROXY') or os.environ.get('HTTP_PROXY')
+        if self._proxy and self._proxy.startswith('http://'):
+            # 转换 HTTP 代理为 HTTPS 和 WSS
+            self._proxy_host = self._proxy.split('://')[1].split(':')[0]
+            self._proxy_port = int(self._proxy.split(':')[-1])
+            self._https_proxy = f"http://{self._proxy_host}:{self._proxy_port}"
+            self._wss_proxy = f"http://{self._proxy_host}:{self._proxy_port}"
+        
         # 创建共享的 SSL 上下文和连接器
         self._ssl_context = ssl.create_default_context(cafile=certifi.where())
         self._ssl_context.check_hostname = False
@@ -39,10 +48,22 @@ class EdgeTTSService:
     async def _get_session(self) -> ClientSession:
         """获取或创建共享的会话"""
         if self._session is None or self._session.closed:
-            self._session = ClientSession(
-                connector=self._connector,
-                trust_env=True
-            )
+            # 配置代理
+            if hasattr(self, '_proxy'):
+                self._session = ClientSession(
+                    connector=self._connector,
+                    trust_env=True,
+                    headers={
+                        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36 Edg/121.0.0.0'
+                    }
+                )
+                if self._https_proxy:
+                    self._session.proxy = self._https_proxy
+            else:
+                self._session = ClientSession(
+                    connector=self._connector,
+                    trust_env=True
+                )
         return self._session
         
     async def _close_session(self):
@@ -168,8 +189,13 @@ class EdgeTTSService:
                             rate=rate_str
                         )
                         
-                        # 设置会话
+                        # 设置会话和代理
                         communicate._client_session = session
+                        if hasattr(self, '_wss_proxy'):
+                            communicate._websocket_kwargs = {
+                                "proxy": self._wss_proxy,
+                                "ssl": self._ssl_context
+                            }
                         
                         # 生成音频
                         temp_file = cache_file.with_suffix('.tmp')
