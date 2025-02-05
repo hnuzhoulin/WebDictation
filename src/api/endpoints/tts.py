@@ -120,15 +120,17 @@ class CheckCacheResponse(BaseModel):
     progress: int  # 添加进度字段
     total: int     # 添加总数字段
 
-async def generate_audio_with_retry(text: str, voice: str, rate: str, output_file: Path, max_retries: int = 3, retry_delay: float = 1.0):
+async def generate_audio_with_retry(text: str, voice: str, rate: float, output_file: Path, max_retries: int = 3, retry_delay: float = 1.0):
     """带重试机制的音频生成函数"""
     for attempt in range(max_retries):
         try:
             # 创建 Communicate 实例
+            rate_str = "+" if rate >= 1 else "-"
+            rate_str += f"{abs(int((rate - 1) * 100))}%"
             communicate = edge_tts.Communicate(
                 text,
                 voice,
-                rate=rate
+                rate=rate_str
             )
             
             # 设置不验证 SSL
@@ -206,7 +208,7 @@ async def generate_batch_speech(request: BatchTTSRequest):
                 await generate_audio_with_retry(
                     word,
                     voice,
-                    f"+{int((request.rate - 1) * 100)}%",
+                    request.rate,
                     word_file
                 )
                 audio_files.append(word_file)

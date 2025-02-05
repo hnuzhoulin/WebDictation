@@ -160,10 +160,12 @@ class EdgeTTSService:
                 try:
                     async with self._semaphore:  # 限制并发数
                         # 创建通信对象
+                        rate_str = "+" if rate >= 1 else "-"
+                        rate_str += f"{abs(int((rate - 1) * 100))}%"
                         communicate = edge_tts.Communicate(
                             text,
                             voice,
-                            rate=f"+{int((rate - 1) * 100)}%"
+                            rate=rate_str
                         )
                         
                         # 设置会话
