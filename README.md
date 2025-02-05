@@ -59,12 +59,12 @@ cd web-dictation-app
 2. 创建虚拟环境
 ```bash
 # Windows
-python -m venv venv
-venv\Scripts\activate
+python -m venv myenv
+myenv\Scripts\activate
 
 # Linux/macOS
-python3 -m venv venv
-source venv/bin/activate
+python3 -m venv myenv
+source myenv/bin/activate
 ```
 
 3. 安装依赖
@@ -94,13 +94,32 @@ WORDS_FILE=data/words.xlsx
 二年级语文上册  第1课    看见,哪里,那边,春天,夏天,秋天,冬天,美丽
 ```
 
-7. 运行应用
+7. 服务管理
+提供了 `service.sh` 脚本用于管理应用：
 ```bash
-# 开发环境
-uvicorn src.main:app --reload --port 8000
+# 添加执行权限
+chmod +x service.sh
 
-# 生产环境
-uvicorn src.main:app --host 0.0.0.0 --port 8000
+# 启动服务
+./service.sh start
+
+# 停止服务
+./service.sh stop
+
+# 重启服务
+./service.sh restart
+
+# 查看状态
+./service.sh status
+
+# 查看日志
+./service.sh logs
+```
+
+注意：如果需要使用代理，请修改 `service.sh` 中的代理设置：
+```bash
+PROXY_HOST="your.proxy.host"
+PROXY_PORT=your_proxy_port
 ```
 
 8. 访问应用
@@ -125,6 +144,7 @@ uvicorn src.main:app --host 0.0.0.0 --port 8000
 ├── cache/            # 缓存目录
 │   └── tts/         # TTS音频缓存
 ├── MP3/              # 生成的MP3文件
+├── service.sh        # 服务管理脚本
 └── requirements.txt  # Python依赖
 ```
 
